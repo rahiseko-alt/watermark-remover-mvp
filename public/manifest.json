@@ -1,0 +1,32 @@
+{
+  "name": "Watermark Remover - AI電子透かし除去",
+  "short_name": "WatermarkRemover",
+  "description": "AI生成テキストの不可視文字・画像や文書のC2PA/EXIFメタデータを高精度・決定論的に除去するPWAアプリ",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "orientation": "portrait-primary",
+  "categories": ["utilities", "productivity", "security"],
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -1,31 +1,36 @@
-# 依存
-node_modules/
-.pnp
+# dependencies
+/node_modules
+/.pnp
 .pnp.js
-.venv/
-__pycache__/
 
-# ビルド成果物・キャッシュ
-.next/
-out/
-dist/
-build/
-.turbo/
-.vercel/
-*.tsbuildinfo
-coverage/
-next-env.d.ts
-playwright-report/
-test-results/
+# testing
+/coverage
 
-# 環境変数（実際の値はコミットしない。名前と用途だけ .env.example に書く）
-.env*
-!.env.example
+# next.js
+/.next/
+/out/
 
-# その他
+# production
+/build
+
+# misc
 .DS_Store
 *.pem
+
+# debug logs
 npm-debug.log*
-pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/

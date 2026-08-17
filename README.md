@@ -1,47 +1,82 @@
-# read me
+# Watermark Remover MVP (AI電子透かし・メタデータ除去 SaaS)
 
-新しい案件を始めるための出発点となるリポジトリ。**このリポジトリ自体でアプリを作らない。**
-コピー（または clone）して、コピー先で新しい案件の作業を始める。
+AI生成コンテンツ（テキスト・画像・文書）に含まれる機械可読情報・不可視透かしを高精度に検査・決定論的に除去するプライバシー重視のSaaS MVPです。
 
-## 同梱しているもの
+OSS `guillaumemeyer/watermarks-remover` の設計思想に基づき、LLMやGPUに依存しない**Layer 1（メタデータ型）**および**Layer 2（不可視文字型）**の決定論的クレンジングを安全かつ高速に実行します。
 
-- `AGENTS.md`：開発ルールの唯一の正。エージェント向けの運用規約
-  （公開前提・秘密情報の扱い・実装の進め方・CI/PRの運用・完了の証明の作法）
-- `.claude/skills/in-out`：セッションの開始（`in`）と終了（`out`）
-- `.claude/skills/setup`：新規リポジトリの初期設定を1回だけ行う（雛形作成／既存コードの
-  取り込み、CI・lint の疎通確認、引継ぎ先の作成まで）
-- `.claude/agents/independent-verifier`：完了報告を、作業した本人以外の立場で独立検証する
-- CI 3層（`quality` / `smoke` / `e2e`）＋ それらを1つに集約する `ci-green`
-  （`.github/workflows/ci.yml`）。`scripts/setup.sh` はこの `ci-green` を branch protection の
-  必須チェックにする
-- `apps/web`：**最小の見本**（Next.js + TypeScript + pnpm）。トップページと `/api/health`、
-  セキュリティヘッダ（CSP/HSTS 等）、それぞれのテスト・E2Eが1件ずつ入っている。
-  「渡し方とチェックが本当に動いていること」を確かめるための取っ掛かりで、
-  次の案件のコードそのものではない
-- `presets/`：新規案件で使う雛形（`AGENTS.md` の下位版、`prod-smoke.yml` の見本）
+---
 
-## 使い方
+## 🎯 MVP対応範囲 & セキュリティ保証
 
-1. このリポジトリをコピーする
-2. 新しいリポジトリで `in`（`.claude/skills/in-out`）と伝える
-3. `AGENTS.md`「コマンド」節が未記入なので `setup` skill が自動的に発火する。
-   何を作るかを聞かれるので答える
-4. `setup` の手順2で、同梱の見本（`apps/web`）を消してから、その案件の雛形を作る
+| 区分 | 主な対象 | 処理の性質 | MVP対応 |
+|---|---|---|---|
+| **1. メタデータ型** | C2PA / Content Credentials, EXIF, XMP, IPTC, PNG prompt chunks, DOCXプロパティ, PDF Info/XMP | 決定論的剥離 | **✓ 完全対応** |
+| **2. 不可視文字型** | ゼロ幅文字 (ZWSP/ZWNJ/ZWNBSP), Unicode Tags (U+E0001〜U+E007F), Bidi制御文字, PUA | 除去・NFC正規化 | **✓ 完全対応** |
+| 3. 統計的テキスト透かし | トークン選択・文章パターン | LLMリライト | Phase 2 |
+| 4. 画像ピクセル型 | SynthID系 / Tree-Ring / CtrlRegen | ピクセル再生成 | Phase 3 |
 
-エンジニアが手動で行う場合は `bash scripts/setup.sh`（branch protection を掛ける。
-`gh` CLI の認証が要る）。
+### 🛡️ 敵対的検証・偽陽性防止保証 (Adversarial Quality Gates)
+- **絵文字 ZWJ の完全保全**: 家族絵文字 (`👩‍👩‍👧‍👦`) や虹の旗 (`🏳️‍🌈`) などの ZWJ シーケンスを分解せず維持。
+- **日本語 異体字セレクタ (IVS) の保全**: `葛󠄀`, `辻󠄀` などの `U+E0100-U+E01EF` を維持。
+- **画像ピクセル完全性 (Lossless Guarantee)**: メタデータのみを除去し、ピクセルデータ（RGB/RGBA）は無傷で保全。
+- **Zero-Retention プライバシー**: ファイル・文章はサーバーに永続保存せず、オンメモリ/即時破棄。
+- **冪等性 (Idempotence)**: `f(f(x)) === f(x)` を保証。
 
-## 起動（見本 `apps/web` を触る場合）
+---
 
-必要なソフト: Node.js 22 以上、pnpm 10（`packageManager` で固定）。
+## 🚀 クイックスタート (ローカル起動)
 
+### 1. 依存関係のインストール
 ```bash
-pnpm install
-pnpm dev
+npm install
 ```
 
-http://localhost:3000 を開く。
+### 2. 開発サーバーの起動
+```bash
+npm run dev
+```
+ブラウザで [http://localhost:3000](http://localhost:3000) を開きます。
 
-## コマンド
+### 3. テストの実行
+```bash
+npm test
+```
 
-コマンドは `AGENTS.md` の「コマンド」節を正とする（現在は未記入。案件が決まったら埋める）。
+---
+
+## 📡 API エンドポイント
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| `GET` | `/api/health` | サービス稼働ヘルスチェック |
+| `GET` | `/api/capabilities` | 対応機能・スコープ・保護仕様一覧 |
+| `POST` | `/api/inspect` | テキスト/ファイルの透かし・メタデータ事前検査 |
+| `POST` | `/api/clean` | クレンジング実行 + Before/After 再検査レポート返却 |
+
+### API リクエスト例 (テキスト)
+```bash
+curl -X POST http://localhost:3000/api/clean \
+  -H "Content-Type: application/json" \
+  -d '{"text": "AI生成\u200Bテキスト\uFEFFです。"}'
+```
+
+### API リクエスト例 (ファイル)
+```bash
+curl -X POST http://localhost:3000/api/clean \
+  -F "file=@sample_image.png"
+```
+
+---
+
+## 🐳 Docker 起動
+
+```bash
+docker build -t watermark-remover-mvp .
+docker run -p 3000:3000 watermark-remover-mvp
+```
+
+---
+
+## 📄 ライセンス
+
+MIT License

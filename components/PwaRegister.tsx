@@ -60,10 +60,12 @@ export function PwaRegister() {
       <button
         type="button"
         onClick={handleInstallClick}
-        className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-semibold text-xs shadow-2xl shadow-emerald-500/40 border border-emerald-400/30 transition-transform active:scale-95"
+        className="flex items-center gap-2.5 px-4 py-2.5 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white font-semibold text-xs shadow-2xl shadow-emerald-500/30 border border-emerald-500/40 hover:border-emerald-400 transition-all hover:scale-105 active:scale-95 group"
       >
-        <Smartphone className="w-4 h-4" />
-        <span>アプリとしてインストール</span>
+        <img src="/icons/icon-192x192.png" alt="App Icon" className="w-5 h-5 rounded-lg shadow-sm" />
+        <span className="bg-gradient-to-r from-emerald-300 via-teal-200 to-white bg-clip-text text-transparent font-bold">
+          ホーム画面に追加（PWA）
+        </span>
       </button>
     </div>
   );

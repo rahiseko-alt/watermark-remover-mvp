@@ -3,6 +3,8 @@
 import React, { useState } from "react";
 import {
   CheckCircle2,
+  AlertTriangle,
+  Info,
   Copy,
   Check,
   Download,
@@ -11,9 +13,7 @@ import {
   ChevronUp,
   FileText,
   RotateCcw,
-  Sparkles,
   Layers,
-  Eye,
 } from "lucide-react";
 import { UnifiedCleanResult } from "@/lib/engine/orchestrator";
 
@@ -25,11 +25,9 @@ interface InspectionReportProps {
 export function InspectionReport({ result, onReset }: InspectionReportProps) {
   const [copied, setCopied] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
-  const [showDiff, setShowDiff] = useState(false);
 
   const isText = result.mode === "text" || !result.cleanedBufferBase64;
-  const beforeSummary = result.inspectionBefore.summary;
-  const afterSummary = result.inspectionAfter.summary;
+  const status = result.status; // "success" | "partial" | "unchanged"
 
   const handleCopy = async () => {
     if (result.cleanedText) {
@@ -62,21 +60,50 @@ export function InspectionReport({ result, onReset }: InspectionReportProps) {
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-6">
-      {/* Header Banner */}
+      {/* Dynamic Header Banner based on verified status */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
         <div className="flex items-center gap-3.5">
-          <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-            <CheckCircle2 className="w-7 h-7" />
-          </div>
+          {status === "success" && (
+            <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+              <CheckCircle2 className="w-7 h-7" />
+            </div>
+          )}
+          {status === "unchanged" && (
+            <div className="w-12 h-12 rounded-xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400">
+              <Info className="w-7 h-7" />
+            </div>
+          )}
+          {status === "partial" && (
+            <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+          )}
+
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-xl font-bold text-white tracking-tight">クリーンアップ完了</h2>
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
-                100% 決定論的処理済み
+              <h2 className="text-xl font-bold text-white tracking-tight">
+                {status === "success" && "クリーンアップ完了"}
+                {status === "unchanged" && "対象情報は検出されませんでした"}
+                {status === "partial" && "一部の情報が残存しています"}
+              </h2>
+              <span
+                className={`text-xs px-2.5 py-0.5 rounded-full font-semibold border ${
+                  status === "success"
+                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                    : status === "unchanged"
+                    ? "bg-teal-500/20 text-teal-300 border-teal-500/30"
+                    : "bg-amber-500/20 text-amber-300 border-amber-500/30"
+                }`}
+              >
+                {status === "success" && "再検査: 残存なし"}
+                {status === "unchanged" && "元データ維持 (変更なし)"}
+                {status === "partial" && "再検査: 一部未除去"}
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              再検査済み：対象の不可視文字およびメタデータは完全に除去されました
+              {status === "success" && "検出された対象項目を除去し、再検査で残存がないことを確認しました。"}
+              {status === "unchanged" && "透かしやメタデータは検出されなかったため、元データに変更を加えていません。"}
+              {status === "partial" && "一部の項目は現在のルールセットでは除去できませんでした。残存項目をご確認ください。"}
             </p>
           </div>
         </div>
@@ -91,77 +118,76 @@ export function InspectionReport({ result, onReset }: InspectionReportProps) {
         </button>
       </div>
 
-      {/* Detection & Clean Summary Grid */}
+      {/* Detection & Verification Summary Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Detected Info */}
+        {/* Detected Info (Before) */}
         <div className="bg-slate-950/60 rounded-xl p-4 border border-slate-800/80">
           <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5 flex items-center justify-between">
-            <span>検出された情報 (Before)</span>
-            <span className="text-amber-400 font-bold">
-              {result.stats.removedCount > 0 ? `${result.stats.removedCount} 件検出` : "0 件 (クリーン)"}
+            <span>事前検査 (Before)</span>
+            <span className={result.stats.removedCount > 0 ? "text-amber-400 font-bold" : "text-emerald-400 font-bold"}>
+              {result.stats.removedCount > 0 ? `${result.stats.removedCount} 項目検出` : "検出なし (クリーン)"}
             </span>
           </div>
 
           <div className="space-y-1.5 text-xs">
             {result.inspectionBefore.details.length > 0 ? (
-              result.inspectionBefore.details.slice(0, 4).map((item, idx) => (
+              result.inspectionBefore.details.slice(0, 5).map((item, idx) => (
                 <div key={idx} className="flex items-start gap-2 text-slate-300">
                   <span className="text-amber-400 font-mono mt-0.5">•</span>
                   <span>{item}</span>
                 </div>
               ))
             ) : (
-              <div className="text-slate-500 italic">透かしやメタデータは検出されませんでした</div>
+              <div className="text-slate-400 italic">透かしやメタデータは検出されませんでした</div>
             )}
-            {result.inspectionBefore.details.length > 4 && (
-              <div className="text-slate-500 text-[11px] pl-3">
-                他 {result.inspectionBefore.details.length - 4} 件
+            {result.inspectionBefore.details.length > 5 && (
+              <div className="text-slate-400 text-[11px] pl-3">
+                他 {result.inspectionBefore.details.length - 5} 項目
               </div>
             )}
           </div>
         </div>
 
-        {/* Action Taken Info */}
+        {/* Verification Info (After) */}
         <div className="bg-slate-950/60 rounded-xl p-4 border border-slate-800/80">
           <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5 flex items-center justify-between">
-            <span>実施された処理 (After)</span>
-            <span className="text-emerald-400 font-bold flex items-center gap-1">
+            <span>再検査結果 (After)</span>
+            <span
+              className={`font-bold flex items-center gap-1 ${
+                result.inspectionAfter.clean ? "text-emerald-400" : "text-amber-400"
+              }`}
+            >
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>残存 0 件 (安全)</span>
+              <span>
+                {result.inspectionAfter.clean
+                  ? "残存 0 項目 (Clean)"
+                  : `${result.stats.remainingItems.length} 項目残存`}
+              </span>
             </span>
           </div>
 
           <div className="space-y-1.5 text-xs text-slate-300">
-            {isText ? (
-              <>
-                <div className="flex items-center gap-2 text-emerald-400">
+            {result.stats.removedCategories.length > 0 ? (
+              result.stats.removedCategories.map((cat, idx) => (
+                <div key={idx} className="flex items-center gap-2 text-emerald-400">
                   <Check className="w-3.5 h-3.5 shrink-0" />
-                  <span>不可視文字・ゼロ幅透かしを完全除去</span>
+                  <span>除去完了: {cat}</span>
                 </div>
-                <div className="flex items-center gap-2 text-emerald-400">
-                  <Check className="w-3.5 h-3.5 shrink-0" />
-                  <span>UnicodeをNFC正規化（合成文字・絵文字ZWJ・IVS保全）</span>
-                </div>
-                <div className="flex items-center gap-2 text-emerald-400">
-                  <Check className="w-3.5 h-3.5 shrink-0" />
-                  <span>再検査完了：文章のクリーン状態を確認済み</span>
-                </div>
-              </>
+              ))
             ) : (
-              <>
-                <div className="flex items-center gap-2 text-emerald-400">
-                  <Check className="w-3.5 h-3.5 shrink-0" />
-                  <span>対象メタデータ（C2PA/EXIF/XMP/プロパティ）を剥離</span>
-                </div>
-                <div className="flex items-center gap-2 text-emerald-400">
-                  <Check className="w-3.5 h-3.5 shrink-0" />
-                  <span>コンテンツ完全性を保持して再構成</span>
-                </div>
-                <div className="flex items-center gap-2 text-emerald-400">
-                  <Check className="w-3.5 h-3.5 shrink-0" />
-                  <span>再検査完了：ファイル内部のメタデータ除去を確認済み</span>
-                </div>
-              </>
+              <div className="text-slate-400">除去処理は実行されませんでした（元データを維持）</div>
+            )}
+
+            {/* If partial, show remaining items clearly */}
+            {result.stats.remainingItems.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-slate-800">
+                <div className="text-amber-400 font-semibold mb-1">未除去の残存項目:</div>
+                {result.stats.remainingItems.map((rem, idx) => (
+                  <div key={idx} className="text-amber-300/90 pl-2">
+                    ⚠ {rem}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
@@ -173,7 +199,9 @@ export function InspectionReport({ result, onReset }: InspectionReportProps) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <FileText className="w-4 h-4 text-emerald-400" />
-              <label className="text-xs font-semibold text-slate-300">処理済み文章</label>
+              <label className="text-xs font-semibold text-slate-300">
+                {status === "unchanged" ? "入力文章 (変更なし)" : "クリーンアップ済み文章"}
+              </label>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -216,6 +244,7 @@ export function InspectionReport({ result, onReset }: InspectionReportProps) {
               <div className="text-xs text-slate-400 mt-0.5">
                 形式: {result.format.toUpperCase()} • サイズ:{" "}
                 {(result.stats.cleanedSize / 1024).toFixed(1)} KB
+                {status === "unchanged" && " (元ファイル維持)"}
               </div>
             </div>
           </div>
@@ -252,7 +281,7 @@ export function InspectionReport({ result, onReset }: InspectionReportProps) {
               {result.format})
             </div>
             <div>
-              <span className="text-emerald-400">Deterministic Engine:</span> Layer 1 Metadata + Layer 2 Invisible Characters
+              <span className="text-emerald-400">Verified Status:</span> {result.status}
             </div>
             <div>
               <span className="text-emerald-400">Original Size:</span> {result.stats.originalSize} bytes
@@ -261,11 +290,12 @@ export function InspectionReport({ result, onReset }: InspectionReportProps) {
               <span className="text-emerald-400">Cleaned Size:</span> {result.stats.cleanedSize} bytes
             </div>
             <div>
-              <span className="text-emerald-400">Stripped Categories:</span>{" "}
+              <span className="text-emerald-400">Stripped Items:</span>{" "}
               {result.stats.removedCategories.join(", ") || "None"}
             </div>
             <div>
-              <span className="text-emerald-400">Adversarial Safety Checks:</span> Emoji ZWJ (Preserved), IVS Selectors (Preserved), Diacritics (NFC Normalized)
+              <span className="text-emerald-400">Remaining Items:</span>{" "}
+              {result.stats.remainingItems.join(", ") || "0 (Clean)"}
             </div>
           </div>
         )}

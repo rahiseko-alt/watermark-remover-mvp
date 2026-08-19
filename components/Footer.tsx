@@ -22,7 +22,7 @@ export function Footer() {
             <ul className="space-y-2">
               <li className="flex items-center gap-2 text-emerald-400">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>1. メタデータ型 (C2PA, EXIF, XMP, DOCX/PDFプロパティ)</span>
+                <span>1. メタデータ型 (EXIF, XMP, IPTC, DOCX/PDFプロパティ)</span>
               </li>
               <li className="flex items-center gap-2 text-emerald-400">
                 <CheckCircle2 className="w-3.5 h-3.5" />
@@ -30,7 +30,7 @@ export function Footer() {
               </li>
               <li className="flex items-center gap-2 text-emerald-400">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>絵文字ZWJ・日本語IVS・アクセント合成文字の完全保全</span>
+                <span>絵文字ZWJ・日本語IVS・アクセント合成文字の保全</span>
               </li>
             </ul>
           </div>

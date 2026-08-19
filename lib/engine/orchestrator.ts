@@ -3,6 +3,7 @@ import { cleanDocument, inspectDocument } from "./documentCleaner";
 import { cleanText, inspectText } from "./textCleaner";
 
 export type InputMode = "text" | "file";
+export type ProcessingStatus = "success" | "partial" | "unchanged";
 
 export interface UnifiedInspectResult {
   mode: InputMode;
@@ -14,6 +15,11 @@ export interface UnifiedInspectResult {
     invisibleCharactersCount?: number;
     metadataItemsCount?: number;
     categoriesDetected: string[];
+    confidenceSummary?: {
+      highConfidence: number;
+      suspicious: number;
+      informational: number;
+    };
   };
   details: string[];
   rawInspection: any;
@@ -24,6 +30,7 @@ export interface UnifiedCleanResult {
   filename?: string;
   outputFilename?: string;
   format: string;
+  status: ProcessingStatus;
   inspectionBefore: UnifiedInspectResult;
   inspectionAfter: UnifiedInspectResult;
   cleanedText?: string;
@@ -34,21 +41,30 @@ export interface UnifiedCleanResult {
     removedCategories: string[];
     originalSize: number;
     cleanedSize: number;
+    remainingItems: string[];
   };
 }
 
 /**
- * Detect file category based on filename or MIME type
+ * Verify Magic Bytes to prevent extension spoofing
  */
-export function detectFileCategory(filename: string, mimeType?: string): "image" | "document" | "text" {
+export function verifyMagicBytes(buffer: Buffer, filename: string): "image" | "document" | "text" {
   const ext = filename.split(".").pop()?.toLowerCase() || "";
 
-  if (["png", "jpg", "jpeg", "webp"].includes(ext) || (mimeType && mimeType.startsWith("image/"))) {
-    return "image";
-  }
-  if (["docx", "pdf"].includes(ext) || mimeType === "application/pdf" || mimeType?.includes("wordprocessingml")) {
-    return "document";
-  }
+  // PNG: 89 50 4E 47
+  if (buffer.length >= 8 && buffer.readUInt32BE(0) === 0x89504e47) return "image";
+  // JPEG: FF D8 FF
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image";
+  // WebP: RIFF ... WEBP
+  if (buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP") return "image";
+
+  // PDF: %PDF
+  if (buffer.length >= 4 && buffer.toString("ascii", 0, 4) === "%PDF") return "document";
+  // DOCX: PK (Zip)
+  if (buffer.length >= 4 && buffer.readUInt32BE(0) === 0x504b0304 && ext === "docx") return "document";
+
+  if (["png", "jpg", "jpeg", "webp"].includes(ext)) return "image";
+  if (["docx", "pdf"].includes(ext)) return "document";
   return "text";
 }
 
@@ -68,6 +84,7 @@ export async function inspectUnified(
       summary: {
         invisibleCharactersCount: textRes.totalDetected,
         categoriesDetected: textRes.detectedTypes,
+        confidenceSummary: textRes.confidenceSummary,
       },
       details: textRes.details.map((d) => `${d.name} (${d.codePoint})`),
       rawInspection: textRes,
@@ -75,7 +92,7 @@ export async function inspectUnified(
   }
 
   if (data.fileBuffer && data.filename) {
-    const category = detectFileCategory(data.filename, data.mimeType);
+    const category = verifyMagicBytes(data.fileBuffer, data.filename);
 
     if (category === "image") {
       const imgRes = await inspectImage(data.fileBuffer);
@@ -125,7 +142,7 @@ export async function inspectUnified(
         rawInspection: docRes,
       };
     } else {
-      // Plain text / markdown / html file
+      // Plain text file
       const textContent = data.fileBuffer.toString("utf8");
       const textRes = inspectText(textContent);
       return {
@@ -137,6 +154,7 @@ export async function inspectUnified(
         summary: {
           invisibleCharactersCount: textRes.totalDetected,
           categoriesDetected: textRes.detectedTypes,
+          confidenceSummary: textRes.confidenceSummary,
         },
         details: textRes.details.map((d) => `${d.name} (${d.codePoint})`),
         rawInspection: textRes,
@@ -161,6 +179,7 @@ export async function cleanUnified(
     return {
       mode: "text",
       format: "text/plain",
+      status: textRes.status,
       inspectionBefore: beforeUnified,
       inspectionAfter: afterUnified,
       cleanedText: textRes.cleanedText,
@@ -169,12 +188,13 @@ export async function cleanUnified(
         removedCategories: Object.keys(textRes.stats.removedByType),
         originalSize: textRes.stats.originalLength,
         cleanedSize: textRes.stats.cleanedLength,
+        remainingItems: afterUnified.details,
       },
     };
   }
 
   if (data.fileBuffer && data.filename) {
-    const category = detectFileCategory(data.filename, data.mimeType);
+    const category = verifyMagicBytes(data.fileBuffer, data.filename);
     const ext = data.filename.split(".").pop() || "";
     const baseName = data.filename.substring(0, data.filename.lastIndexOf(".")) || data.filename;
     const outputFilename = `${baseName}.cleaned.${ext}`;
@@ -196,6 +216,7 @@ export async function cleanUnified(
         filename: data.filename,
         outputFilename,
         format: imgRes.format,
+        status: imgRes.status,
         inspectionBefore: beforeUnified,
         inspectionAfter: afterUnified,
         cleanedBufferBase64: imgRes.cleanedBuffer.toString("base64"),
@@ -205,6 +226,7 @@ export async function cleanUnified(
           removedCategories: imgRes.stats.strippedItems,
           originalSize: imgRes.stats.originalSize,
           cleanedSize: imgRes.stats.cleanedSize,
+          remainingItems: imgRes.stats.remainingItems,
         },
       };
     } else if (category === "document") {
@@ -222,6 +244,7 @@ export async function cleanUnified(
         filename: data.filename,
         outputFilename,
         format: docRes.format,
+        status: docRes.status,
         inspectionBefore: beforeUnified,
         inspectionAfter: afterUnified,
         cleanedBufferBase64: docRes.cleanedBuffer.toString("base64"),
@@ -231,10 +254,11 @@ export async function cleanUnified(
           removedCategories: docRes.stats.strippedItems,
           originalSize: docRes.stats.originalSize,
           cleanedSize: docRes.stats.cleanedSize,
+          remainingItems: docRes.stats.remainingItems,
         },
       };
     } else {
-      // Plain text file (e.g. .txt, .md, .html)
+      // Plain text file
       const textContent = data.fileBuffer.toString("utf8");
       const textRes = cleanText(textContent);
       const cleanedBuffer = Buffer.from(textRes.cleanedText, "utf8");
@@ -247,6 +271,7 @@ export async function cleanUnified(
         filename: data.filename,
         outputFilename,
         format: ext,
+        status: textRes.status,
         inspectionBefore: beforeUnified,
         inspectionAfter: afterUnified,
         cleanedBufferBase64: cleanedBuffer.toString("base64"),
@@ -256,6 +281,7 @@ export async function cleanUnified(
           removedCategories: Object.keys(textRes.stats.removedByType),
           originalSize: data.fileBuffer.length,
           cleanedSize: cleanedBuffer.length,
+          remainingItems: afterUnified.details,
         },
       };
     }

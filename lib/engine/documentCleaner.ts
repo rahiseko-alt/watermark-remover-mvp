@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, PDFName } from "pdf-lib";
 import { cleanText, inspectText } from "./textCleaner";
 
 export interface DocumentInspectionResult {
@@ -24,16 +24,20 @@ export interface DocumentCleanResult {
   format: "docx" | "pdf";
   inspectionBefore: DocumentInspectionResult;
   inspectionAfter: DocumentInspectionResult;
+  status: "success" | "partial" | "unchanged";
   stats: {
     originalSize: number;
     cleanedSize: number;
     strippedItems: string[];
+    remainingItems: string[];
   };
 }
 
-/**
- * Validate against Zip Slip path traversal attack
- */
+// Security limits for DOCX / Zip Bomb defense
+const MAX_ZIP_TOTAL_UNCOMPRESSED_SIZE = 50 * 1024 * 1024; // 50MB
+const MAX_ZIP_SINGLE_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+const MAX_ZIP_FILE_COUNT = 500;
+
 function isSafeZipPath(filename: string): boolean {
   if (!filename || filename.startsWith("/") || filename.startsWith("\\")) return false;
   const parts = filename.split(/[/\\]/);
@@ -58,8 +62,13 @@ async function inspectDocx(buffer: Buffer): Promise<DocumentInspectionResult> {
 
   try {
     const zip = await JSZip.loadAsync(buffer);
+    const fileEntries = Object.entries(zip.files);
 
-    for (const [filename, file] of Object.entries(zip.files)) {
+    if (fileEntries.length > MAX_ZIP_FILE_COUNT) {
+      throw new Error(`DOCX file count exceeded security limit (${fileEntries.length} > ${MAX_ZIP_FILE_COUNT})`);
+    }
+
+    for (const [filename, file] of fileEntries) {
       if (!isSafeZipPath(filename)) {
         throw new Error("Malicious DOCX file structure detected (Zip Slip)");
       }
@@ -69,10 +78,11 @@ async function inspectDocx(buffer: Buffer): Promise<DocumentInspectionResult> {
         if (
           content.includes("<dc:creator>") ||
           content.includes("<cp:lastModifiedBy>") ||
-          content.includes("<dc:title>")
+          content.includes("<dc:title>") ||
+          content.includes("<cp:revision>")
         ) {
           detected.coreProperties = true;
-          details.push("DOCX Core Document Properties (Author, Title, Modification history)");
+          details.push("DOCX Core Document Properties (Author, Title, Revision history)");
         }
       }
 
@@ -83,13 +93,17 @@ async function inspectDocx(buffer: Buffer): Promise<DocumentInspectionResult> {
 
       if (filename === "docProps/app.xml") {
         const content = await file.async("text");
-        if (content.includes("<Company>") || content.includes("<Application>")) {
+        if (content.includes("<Company>") || content.includes("<Application>") || content.includes("<Manager>")) {
           detected.appProperties = true;
           details.push("DOCX Application & Company Metadata");
         }
       }
 
-      if (filename.includes("comments") || filename.includes("revision")) {
+      if (
+        filename.includes("comments") ||
+        filename.includes("revision") ||
+        filename.includes("people.xml")
+      ) {
         detected.commentsOrRevisions = true;
         details.push("DOCX Comments / Revision Tracking History");
       }
@@ -100,6 +114,11 @@ async function inspectDocx(buffer: Buffer): Promise<DocumentInspectionResult> {
         if (textInspection.hasInvisibleCharacters) {
           detected.invisibleTextWatermarks = true;
           details.push(`DOCX In-document Invisible Text Characters (${textInspection.totalDetected} chars)`);
+        }
+
+        if (content.includes("<w:ins") || content.includes("<w:del")) {
+          detected.commentsOrRevisions = true;
+          details.push("DOCX Tracked Changes in document text");
         }
       }
     }
@@ -124,7 +143,7 @@ async function inspectDocx(buffer: Buffer): Promise<DocumentInspectionResult> {
 }
 
 /**
- * Inspect PDF document for metadata & scripts
+ * Inspect PDF document for metadata, XMP, & scripts
  */
 async function inspectPdf(buffer: Buffer): Promise<DocumentInspectionResult> {
   const details: string[] = [];
@@ -145,28 +164,39 @@ async function inspectPdf(buffer: Buffer): Promise<DocumentInspectionResult> {
     const author = pdfDoc.getAuthor();
     const subject = pdfDoc.getSubject();
     const creator = pdfDoc.getCreator();
-    const producer = pdfDoc.getProducer();
     const keywords = pdfDoc.getKeywords();
 
-    if (title || author || subject || creator || producer || (keywords && keywords.length > 0)) {
+    const isDefaultGenerator = (val?: string) =>
+      !val || val.includes("pdf-lib") || val.trim().length === 0;
+
+    const hasCustomInfo =
+      (title && title.trim().length > 0) ||
+      (author && author.trim().length > 0) ||
+      (subject && subject.trim().length > 0) ||
+      (creator && !isDefaultGenerator(creator)) ||
+      (keywords && keywords.length > 0);
+
+    if (hasCustomInfo) {
       detected.pdfInfoDictionary = true;
-      details.push("PDF Document Info Dictionary (Author, Title, Creator, Producer, Keywords)");
+      details.push("PDF Document Info Dictionary (Author, Title, Creator, Keywords)");
     }
 
-    const rawString = buffer.toString("binary");
-    if (rawString.includes("/Metadata") || rawString.includes("<x:xmpmeta")) {
+    const catalog = pdfDoc.catalog;
+    if (catalog.has(PDFName.of("Metadata"))) {
       detected.pdfXmpMetadata = true;
-      details.push("PDF XMP XML Metadata Stream");
+      details.push("PDF XMP XML Metadata Stream (/Metadata catalog entry)");
     }
 
-    if (
-      rawString.includes("/JavaScript") ||
-      rawString.includes("/JS") ||
-      rawString.includes("/Launch") ||
-      rawString.includes("/OpenAction")
-    ) {
+    if (catalog.has(PDFName.of("Names"))) {
+      const namesObj = catalog.lookup(PDFName.of("Names"));
+      if (namesObj && namesObj.toString().includes("JavaScript")) {
+        detected.pdfActionsOrScripts = true;
+        details.push("PDF Executable Actions (/Names /JavaScript)");
+      }
+    }
+    if (catalog.has(PDFName.of("OpenAction")) || catalog.has(PDFName.of("AA"))) {
       detected.pdfActionsOrScripts = true;
-      details.push("PDF Executable Actions / Scripts (Sanitization target)");
+      details.push("PDF Executable Launch / Open Actions");
     }
   } catch (err: any) {
     details.push(`PDF Parse notice: ${err.message}`);
@@ -221,11 +251,27 @@ export async function inspectDocument(buffer: Buffer, originalFilename: string):
  */
 async function cleanDocx(buffer: Buffer): Promise<DocumentCleanResult> {
   const inspectionBefore = await inspectDocx(buffer);
-  const strippedItems: string[] = [];
 
+  if (!inspectionBefore.hasMetadata) {
+    return {
+      cleanedBuffer: buffer,
+      format: "docx",
+      inspectionBefore,
+      inspectionAfter: inspectionBefore,
+      status: "unchanged",
+      stats: {
+        originalSize: buffer.length,
+        cleanedSize: buffer.length,
+        strippedItems: [],
+        remainingItems: [],
+      },
+    };
+  }
+
+  const strippedItems: string[] = [];
   const zip = await JSZip.loadAsync(buffer);
 
-  // 1. Remove or clean core.xml
+  // 1. Clean core.xml
   if (zip.file("docProps/core.xml")) {
     zip.file(
       "docProps/core.xml",
@@ -254,17 +300,25 @@ async function cleanDocx(buffer: Buffer): Promise<DocumentCleanResult> {
     strippedItems.push("DOCX Application Properties");
   }
 
-  // 4. Remove comments / revisions if present
+  // 4. Remove comments / revisions / people XML
   zip.remove("word/comments.xml");
   zip.remove("word/commentsExtended.xml");
   zip.remove("word/commentsIds.xml");
+  zip.remove("word/people.xml");
+  if (inspectionBefore.detectedItems.commentsOrRevisions) {
+    strippedItems.push("DOCX Comments & People Metadata");
+  }
 
-  // 5. Clean word/document.xml for invisible text characters
+  // 5. Clean word/document.xml for invisible text characters & sanitize tracked changes
   const docFile = zip.file("word/document.xml");
   if (docFile) {
-    const docXml = await docFile.async("text");
-    const cleanedXml = cleanText(docXml).cleanedText;
-    zip.file("word/document.xml", cleanedXml);
+    let docXml = await docFile.async("text");
+
+    docXml = cleanText(docXml).cleanedText;
+    docXml = docXml.replace(/<w:del[\s\S]*?<\/w:del>/gi, "");
+    docXml = docXml.replace(/<w:ins[^>]*>([\s\S]*?)<\/w:ins>/gi, "$1");
+
+    zip.file("word/document.xml", docXml);
     if (inspectionBefore.detectedItems.invisibleTextWatermarks) {
       strippedItems.push("DOCX In-document Invisible Characters");
     }
@@ -277,45 +331,95 @@ async function cleanDocx(buffer: Buffer): Promise<DocumentCleanResult> {
   });
 
   const inspectionAfter = await inspectDocx(cleanedBuffer);
+  const remainingItems = inspectionAfter.details;
+  const status = inspectionAfter.clean ? "success" : "partial";
 
   return {
     cleanedBuffer,
     format: "docx",
     inspectionBefore,
     inspectionAfter,
+    status,
     stats: {
       originalSize: buffer.length,
       cleanedSize: cleanedBuffer.length,
       strippedItems,
+      remainingItems,
     },
   };
 }
 
 /**
- * Clean PDF document
+ * Clean PDF document - Pure Page Reconstruction Pipeline
  */
 async function cleanPdf(buffer: Buffer): Promise<DocumentCleanResult> {
   const inspectionBefore = await inspectPdf(buffer);
+
+  if (!inspectionBefore.hasMetadata) {
+    return {
+      cleanedBuffer: buffer,
+      format: "pdf",
+      inspectionBefore,
+      inspectionAfter: inspectionBefore,
+      status: "unchanged",
+      stats: {
+        originalSize: buffer.length,
+        cleanedSize: buffer.length,
+        strippedItems: [],
+        remainingItems: [],
+      },
+    };
+  }
+
   const strippedItems: string[] = [];
+  const srcDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
 
-  const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+  // Create a brand new clean PDF document
+  const cleanDoc = await PDFDocument.create();
 
-  // Clear Info dictionary
-  pdfDoc.setTitle("");
-  pdfDoc.setAuthor("");
-  pdfDoc.setSubject("");
-  pdfDoc.setCreator("");
-  pdfDoc.setProducer("");
-  pdfDoc.setKeywords([]);
-  pdfDoc.setCreationDate(new Date(0));
-  pdfDoc.setModificationDate(new Date(0));
-  strippedItems.push("PDF Document Information Dictionary");
+  // Copy all visual pages
+  const pageCount = srcDoc.getPageCount();
+  const pageIndices = Array.from({ length: pageCount }, (_, i) => i);
+  const copiedPages = await cleanDoc.copyPages(srcDoc, pageIndices);
 
-  // Save cleaned PDF with minimal object streams
-  const cleanedBytes = await pdfDoc.save({ useObjectStreams: false });
-  let cleanedBuffer = Buffer.from(cleanedBytes);
+  for (const page of copiedPages) {
+    const pageDict = page.node;
+    if (pageDict.has(PDFName.of("AA"))) {
+      pageDict.delete(PDFName.of("AA"));
+    }
+    cleanDoc.addPage(page);
+  }
 
-  // If XMP metadata was detected, strip the /Metadata object reference
+  // Reset public Info properties on cleanDoc
+  cleanDoc.setTitle("");
+  cleanDoc.setAuthor("");
+  cleanDoc.setSubject("");
+  cleanDoc.setCreator("");
+  cleanDoc.setProducer("");
+  cleanDoc.setKeywords([]);
+  cleanDoc.setCreationDate(new Date(0));
+  cleanDoc.setModificationDate(new Date(0));
+
+  // If Info dictionary exists in trailer context, purge custom entries
+  try {
+    const rawInfo = (cleanDoc as any).getInfoDict?.();
+    if (rawInfo) {
+      rawInfo.delete(PDFName.of("Title"));
+      rawInfo.delete(PDFName.of("Author"));
+      rawInfo.delete(PDFName.of("Subject"));
+      rawInfo.delete(PDFName.of("Creator"));
+      rawInfo.delete(PDFName.of("Producer"));
+      rawInfo.delete(PDFName.of("Keywords"));
+      rawInfo.delete(PDFName.of("CreationDate"));
+      rawInfo.delete(PDFName.of("ModDate"));
+    }
+  } catch {
+    // Safe fallback
+  }
+
+  if (inspectionBefore.detectedItems.pdfInfoDictionary) {
+    strippedItems.push("PDF Document Information Dictionary");
+  }
   if (inspectionBefore.detectedItems.pdfXmpMetadata) {
     strippedItems.push("PDF XMP Metadata Stream");
   }
@@ -323,17 +427,25 @@ async function cleanPdf(buffer: Buffer): Promise<DocumentCleanResult> {
     strippedItems.push("PDF Executable Actions / Scripts");
   }
 
+  const cleanedBytes = await cleanDoc.save({ useObjectStreams: false });
+  const cleanedBuffer = Buffer.from(cleanedBytes);
+
+  // Independent re-inspection of the newly reconstructed PDF
   const inspectionAfter = await inspectPdf(cleanedBuffer);
+  const remainingItems = inspectionAfter.details;
+  const status = inspectionAfter.clean ? "success" : "partial";
 
   return {
     cleanedBuffer,
     format: "pdf",
     inspectionBefore,
     inspectionAfter,
+    status,
     stats: {
       originalSize: buffer.length,
       cleanedSize: cleanedBuffer.length,
       strippedItems,
+      remainingItems,
     },
   };
 }
